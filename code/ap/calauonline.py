@@ -23,9 +23,11 @@ calibrator.set_span(180.0)
 calibrator.set_ostep(0.5)
 
 def calibrate_set(dataentry):
-    [rms, x0, _] = calibrator.find_all_pairs_evo(dataentry['deltas'],dataentry['doas'],None,popsize=dataentry['popsize'])
-    [ex1,ey1,ex2,ey2,o1,o2] = x0
-    return [np.array([0,0,ex1,ey1,ex2,ey2,0,o1,o2]), rms**2]
+    [rms, x0, _] = calibrator.find_all_pairs_evo(dataentry['deltas'],dataentry['doas'],None,popsize=dataentry['popsize'])    
+    num= len(x0)/3
+    rs = x0[:2*num]; os = x0[2*num:] 
+    return [np.hstack([[0],[0],rs,[0],os]), rms**2]
+
     
 class OnlineCalibration(object):
 
@@ -63,17 +65,23 @@ class OnlineCalibration(object):
     def get_total_vcores(self):
         return self.total_cores
             
-    def calibrate_sets(self,datasets,maxtime=None):
+    def get_node_count(self):
+        return self.num_arrays
+            
+    def calibrate_sets(self,datasets,maxtime=None,corelimit=None):
         """
-        Perform calibration with a new datasets.
+        Perform calibration with new data sets.
         
         @param: datasets: list of new measurement sets        
-        @param: maxtime: maximum time available for computation, None for no limit
+        @param: maxtime: maximum time available for computation        
         """
         if len(datasets)<1:
             return [None,None,0]
-            
-        print 'running parallel computation on',len(datasets),'sets',
+        if corelimit is None:
+            num_cores = self.total_cores
+        else:
+            num_cores = self.num_arrays * corelimit
+        print 'simulating parallel computation on',len(datasets),'set(s)',
         
         aargs=[]
         for dataentry in datasets:
@@ -94,20 +102,16 @@ class OnlineCalibration(object):
 
         usedtime = time.time() - starttime 
         num_cores_used = min(len(ests),self.num_host)
-        num_cores_virtual = min(len(ests),self.total_cores)
+        num_cores_virtual = min(len(ests),num_cores)
         comptime = usedtime * float(num_cores_used) / num_cores_virtual
-        loadtime = usedtime * self.num_host / num_cores_virtual        
-        if (maxtime is not None) and (comptime>maxtime):
-            print  'new data', len(ests),
-            if len(ests)>1:
-                ests2=[]
-                for (i,x) in enumerate(ests):
-                    if (i%self.total_cores) < (self.num_vnodes*(self.node_cores-1)):
-                        ests2.append(x)
-                ests=ests2
-            print '->',len(ests),'ests'
-        print '%.2fs walltime /%d = %.2fs on target' % (usedtime, num_cores_virtual/num_cores_used, comptime)        
-        return ests, comptime, loadtime
+        loadtime = usedtime * self.num_host / num_cores_virtual
+        print '%.2fs walltime / %d = %.2fs on target' % (usedtime, num_cores_virtual/num_cores_used, comptime)
+        if (maxtime is not None) and (comptime > maxtime):
+            print 'abort, took %.2fs of %.2fs available' % (comptime, maxtime)
+            ests = []
+            return [],0,0        
+                
+        return ests, comptime, loadtime 
     
     def computemeanestimate(self,allests):
         '''
